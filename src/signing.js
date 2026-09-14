@@ -23,11 +23,18 @@ function parseKey(keyString) {
  * @param {string} narinfo.storePath
  * @param {string} narinfo.narHash   - e.g. "sha256:abc..."
  * @param {number} narinfo.narSize
- * @param {string[]} narinfo.references - list of full store paths
+ * @param {string[]} narinfo.references Short store-path names as encoded in the narinfo References field
  * @returns {string}
  */
 function fingerprint(narinfo) {
-  const refs = (narinfo.references || []).join(',');
+  const lastSlash = narinfo.storePath.lastIndexOf('/');
+  const storeDir = narinfo.storePath.slice(0, lastSlash);
+
+  const refs = (narinfo.references || [])
+    .map(ref => ref.startsWith('/') ? ref : `${storeDir}/${ref}`)
+    .sort()
+    .join(',');
+
   return `1;${narinfo.storePath};${narinfo.narHash};${narinfo.narSize};${refs}`;
 }
 
