@@ -1,0 +1,283 @@
+name: 'static-nix-cache Deploy'
+description: 'Deploy Nix store paths to an static-nix-cache instance'
+
+inputs:
+  paths-file:
+    description: 'Path to a file containing store paths to deploy. When omitted, paths are auto-detected from the setup snapshot, restored artifacts, or a running magic-nix-cache daemon.'
+    required: false
+  export-dir:
+    description: 'Path to a nix binary cache export directory. When set, paths are copied from this store instead of the local nix store.'
+    required: false
+  snapshot-path:
+    description: 'Path to the store snapshot file from the setup action. When the file exists (and paths-file is omitted), new store paths are auto-detected by diffing the nix store.'
+    required: false
+    default: '/tmp/static-nix-cache-setup/store-paths-before.txt'
+  store-dir:
+    description: 'Path to the Nix store directory (used for auto-detection)'
+    required: false
+    default: '/nix/store'
+  artifact-pattern:
+    description: 'Artifact name pattern for auto-restore (default: static-nix-cache-*). Used when no paths-file or snapshot is available.'
+    required: false
+    default: 'static-nix-cache-*'
+  backend:
+    description: 'Storage backend: github-releases, s3, or local'
+    required: false
+    default: 'github-releases'
+  github-token:
+    description: 'GitHub token (required for github-releases backend)'
+    required: false
+  github-owner:
+    description: 'GitHub repository owner (defaults to current repository owner)'
+    required: false
+  github-repo:
+    description: 'GitHub repository name (defaults to current repository name)'
+    required: false
+  github-release-tag:
+    description: 'GitHub release tag for NAR storage'
+    required: false
+    default: 'nix-cache'
+  signing-key:
+    description: 'Nix signing key (keyname:base64-ed25519-private)'
+    required: false
+  upload-secret:
+    description: 'Bearer token for upload authentication'
+    required: false
+  static:
+    description: 'Output directory for static site generation (omit to skip)'
+    required: false
+  port:
+    description: 'Port for the temporary static-nix-cache server'
+    required: false
+    default: '18734'
+  compression:
+    description: 'Compression type for nix copy (none, xz, zstd)'
+    required: false
+    default: 'none'
+
+runs:
+  using: composite
+  steps:
+    - name: Try restoring artifacts
+      id: try-restore
+      if: inputs.paths-file == ''
+      continue-on-error: true
+      uses: actions/download-artifact@v4
+      with:
+        pattern: ${{ inputs.artifact-pattern }}
+        path: /tmp/static-nix-cache-restore
+
+    - name: Aggregate restored artifacts
+      id: aggregate
+      if: steps.try-restore.outcome == 'success'
+      shell: bash
+      run: |
+        set -euo pipefail
+        AGGREGATE_DIR="/tmp/static-nix-cache-aggregate"
+
+        # Check if any artifacts were actually downloaded
+        if [ ! -d /tmp/static-nix-cache-restore ] || [ -z "$(ls -A /tmp/static-nix-cache-restore 2>/dev/null)" ]; then
+          echo "No artifacts found"
+          echo "found=false" >> "$GITHUB_OUTPUT"
+          exit 0
+        fi
+
+        mkdir -p "$AGGREGATE_DIR/nix-cache"
+        : > "$AGGREGATE_DIR/store-paths.txt"
+
+        for dir in /tmp/static-nix-cache-restore/*/; do
+          [ -d "$dir" ] || continue
+          echo "Merging: $dir"
+
+          if [ -f "$dir/store-paths.txt" ]; then
+            cat "$dir/store-paths.txt" >> "$AGGREGATE_DIR/store-paths.txt"
+          fi
+
+          if [ -d "$dir/nix-cache" ]; then
+            cp -rn "$dir/nix-cache/." "$AGGREGATE_DIR/nix-cache/" 2>/dev/null || true
+          fi
+        done
+
+        sort -u -o "$AGGREGATE_DIR/store-paths.txt" "$AGGREGATE_DIR/store-paths.txt"
+
+        count=$(wc -l < "$AGGREGATE_DIR/store-paths.txt")
+        if [ "$count" -gt 0 ]; then
+          echo "Restored $count unique store path(s) from artifacts"
+          echo "found=true" >> "$GITHUB_OUTPUT"
+          echo "paths-file=$AGGREGATE_DIR/store-paths.txt" >> "$GITHUB_OUTPUT"
+          echo "export-dir=$AGGREGATE_DIR/nix-cache" >> "$GITHUB_OUTPUT"
+        else
+          echo "No store paths found in artifacts"
+          echo "found=false" >> "$GITHUB_OUTPUT"
+        fi
+
+    - name: Resolve store paths
+      id: prepare
+      shell: bash
+      env:
+        INPUT_PATHS_FILE: ${{ inputs.paths-file }}
+        SNAPSHOT_PATH: ${{ inputs.snapshot-path }}
+        STORE_DIR: ${{ inputs.store-dir }}
+        RESTORED_FOUND: ${{ steps.aggregate.outputs.found }}
+        RESTORED_PATHS_FILE: ${{ steps.aggregate.outputs.paths-file }}
+      run: |
+        set -euo pipefail
+        PATHS_FILE="/tmp/static-nix-cache-deploy-paths.txt"
+
+        if [ -n "$INPUT_PATHS_FILE" ] && [ -f "$INPUT_PATHS_FILE" ]; then
+          # Explicit paths-file provided
+          cp "$INPUT_PATHS_FILE" "$PATHS_FILE"
+
+        elif [ "$RESTORED_FOUND" = "true" ] && [ -n "$RESTORED_PATHS_FILE" ] && [ -f "$RESTORED_PATHS_FILE" ]; then
+          # Auto-restored from artifacts (deferred deploy pattern)
+          cp "$RESTORED_PATHS_FILE" "$PATHS_FILE"
+
+        elif [ -n "$SNAPSHOT_PATH" ] && [ -f "$SNAPSHOT_PATH" ]; then
+          # Auto-detect new paths by diffing the store (setup was used in same job)
+          echo "Auto-detecting new store paths..."
+          CURRENT_PATHS=$(mktemp)
+          find "$STORE_DIR" -maxdepth 1 -mindepth 1 \
+            -not -name '.links' \
+            -not -name '*.drv' \
+            -not -name '*.chroot' \
+            | sort > "$CURRENT_PATHS"
+          comm -23 "$CURRENT_PATHS" "$SNAPSHOT_PATH" > "$PATHS_FILE"
+          rm -f "$CURRENT_PATHS"
+
+        else
+          # Last resort: try magic-nix-cache at default address
+          MNC_ADDR="127.0.0.1:37515"
+          echo "Trying magic-nix-cache at default address $MNC_ADDR..."
+
+          if RESPONSE=$(curl -sf -X POST "http://${MNC_ADDR}/api/workflow-finish" 2>&1); then
+            NUM_NEW=$(echo "$RESPONSE" | grep -o '"num_new_paths":[0-9]*' | grep -o '[0-9]*' || echo "unknown")
+            echo "magic-nix-cache reported $NUM_NEW new path(s)"
+
+            # Use daemon.pid as a time reference to find paths added during the build
+            MNC_DAEMON_DIR="${MAGIC_NIX_CACHE_DAEMONDIR:-}"
+            MNC_PID_FILE="$MNC_DAEMON_DIR/daemon.pid"
+
+            if [ -f "$MNC_PID_FILE" ]; then
+              echo "Detecting new store paths since magic-nix-cache started..."
+              find "$STORE_DIR" -maxdepth 1 -mindepth 1 \
+                -not -name '.links' \
+                -not -name '*.drv' \
+                -not -name '*.chroot' \
+                -cnewer "$MNC_PID_FILE" \
+                | sort > "$PATHS_FILE"
+            else
+              echo "::warning::magic-nix-cache is running but MAGIC_NIX_CACHE_DAEMONDIR not set; deploying all current store paths."
+              find "$STORE_DIR" -maxdepth 1 -mindepth 1 \
+                -not -name '.links' \
+                -not -name '*.drv' \
+                -not -name '*.chroot' \
+                | sort > "$PATHS_FILE"
+            fi
+          else
+            echo "::error::Could not detect store paths. Use the setup action, save+deploy pattern, or ensure magic-nix-cache is running."
+            exit 1
+          fi
+        fi
+
+        count=$(wc -l < "$PATHS_FILE")
+        echo "Will deploy $count store path(s)"
+        echo "paths-file=$PATHS_FILE" >> "$GITHUB_OUTPUT"
+
+    - name: Install static-nix-cache
+      id: install
+      shell: bash
+      run: |
+        set -euo pipefail
+        STATIC_NIX_CACHE_DIR="${{ github.action_path }}/.."
+        cd "$STATIC_NIX_CACHE_DIR"
+        npm ci --ignore-scripts --silent
+        echo "static-nix-cache-dir=$(cd "$STATIC_NIX_CACHE_DIR" && pwd)" >> "$GITHUB_OUTPUT"
+
+    - name: Start static-nix-cache server
+      id: server
+      shell: bash
+      env:
+        STORAGE_BACKEND: ${{ inputs.backend }}
+        GITHUB_TOKEN: ${{ inputs.github-token }}
+        GITHUB_OWNER: ${{ inputs.github-owner }}
+        GITHUB_REPO: ${{ inputs.github-repo }}
+        GITHUB_RELEASE_TAG: ${{ inputs.github-release-tag }}
+        SIGNING_KEY: ${{ inputs.signing-key }}
+        UPLOAD_SECRET: ${{ inputs.upload-secret }}
+        PORT: ${{ inputs.port }}
+        STATIC_NIX_CACHE_DIR: ${{ steps.install.outputs.static-nix-cache-dir }}
+      run: |
+        set -euo pipefail
+
+        # Default owner/repo to current repository if not provided
+        export GITHUB_OWNER="${GITHUB_OWNER:-${{ github.repository_owner }}}"
+        export GITHUB_REPO="${GITHUB_REPO:-${{ github.event.repository.name }}}"
+
+        node "$STATIC_NIX_CACHE_DIR/index.js" > /tmp/static-nix-cache-deploy.log 2>&1 &
+        SERVER_PID=$!
+        echo "server-pid=$SERVER_PID" >> "$GITHUB_OUTPUT"
+
+        # Wait for server to be ready
+        for i in $(seq 1 30); do
+          if curl -sf "http://localhost:${PORT}/nix-cache-info" > /dev/null 2>&1; then
+            echo "static-nix-cache server ready on port $PORT"
+            break
+          fi
+          if ! kill -0 "$SERVER_PID" 2>/dev/null; then
+            echo "::error::static-nix-cache server exited unexpectedly"
+            cat /tmp/static-nix-cache-deploy.log
+            exit 1
+          fi
+          sleep 1
+        done
+
+    - name: Push store paths
+      shell: bash
+      env:
+        EXPORT_DIR: ${{ inputs.export-dir || steps.aggregate.outputs.export-dir }}
+        PORT: ${{ inputs.port }}
+        COMPRESSION: ${{ inputs.compression }}
+      run: |
+        set -euo pipefail
+        PATHS_FILE="${{ steps.prepare.outputs.paths-file }}"
+
+        copy_args=()
+        if [ -n "$EXPORT_DIR" ] && [ -d "$EXPORT_DIR" ]; then
+          copy_args+=(--from "file://$EXPORT_DIR")
+          echo "Copying from exported binary cache: $EXPORT_DIR"
+        fi
+
+        while IFS= read -r p; do
+          [ -z "$p" ] && continue
+          echo "Pushing: $p"
+          nix copy "${copy_args[@]}" --to "http://localhost:${PORT}?compression=${COMPRESSION}" --no-check-sigs "$p"
+        done < "$PATHS_FILE"
+
+    - name: Generate static site
+      if: inputs.static != ''
+      shell: bash
+      env:
+        GITHUB_OWNER: ${{ inputs.github-owner }}
+        GITHUB_REPO: ${{ inputs.github-repo }}
+        GITHUB_RELEASE_TAG: ${{ inputs.github-release-tag }}
+        GITHUB_TOKEN: ${{ inputs.github-token }}
+        OUTPUT_DIR: ${{ inputs.static }}
+        STATIC_NIX_CACHE_DIR: ${{ steps.install.outputs.static-nix-cache-dir }}
+      run: |
+        set -euo pipefail
+        export GITHUB_OWNER="${GITHUB_OWNER:-${{ github.repository_owner }}}"
+        export GITHUB_REPO="${GITHUB_REPO:-${{ github.event.repository.name }}}"
+        node "$STATIC_NIX_CACHE_DIR/generate-static.js"
+
+    - name: Stop static-nix-cache server
+      if: always()
+      shell: bash
+      run: kill "${{ steps.server.outputs.server-pid }}" 2>/dev/null || true
+
+    - name: Upload server logs
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: static-nix-cache-deploy-log
+        path: /tmp/static-nix-cache-deploy.log
+        retention-days: 7

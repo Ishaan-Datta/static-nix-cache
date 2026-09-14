@@ -1,0 +1,102 @@
+name: 'static-nix-cache Save'
+description: 'Export new Nix store paths as a workflow artifact for later deployment with the deploy action'
+
+inputs:
+  name:
+    description: 'Unique name for this artifact (e.g. linux-x86_64). Used as a suffix for the artifact name.'
+    required: false
+    default: 'default'
+  signing-key:
+    description: 'Nix signing key (keyname:base64-ed25519-private). If provided, exported binaries will be signed.'
+    required: false
+  snapshot-path:
+    description: 'Path to the store snapshot file from the setup action (used for auto-detection)'
+    required: false
+    default: '/tmp/static-nix-cache-setup/store-paths-before.txt'
+  store-dir:
+    description: 'Path to the Nix store directory (used for auto-detection)'
+    required: false
+    default: '/nix/store'
+
+runs:
+  using: composite
+  steps:
+    - name: Export store paths
+      id: export
+      shell: bash
+      env:
+        ARTIFACT_NAME: ${{ inputs.name }}
+        SNAPSHOT_PATH: ${{ inputs.snapshot-path }}
+        STORE_DIR: ${{ inputs.store-dir }}
+      run: |
+        set -euo pipefail
+        EXPORT_DIR="/tmp/static-nix-cache-save/${ARTIFACT_NAME}"
+        mkdir -p "$EXPORT_DIR"
+
+        if [ -f "$SNAPSHOT_PATH" ]; then
+          # Auto-detect new paths by diffing the store against the setup snapshot
+          echo "Auto-detecting new store paths..."
+          CURRENT_PATHS=$(mktemp)
+          find "$STORE_DIR" -maxdepth 1 -mindepth 1 \
+            -not -name '.links' \
+            -not -name '*.drv' \
+            -not -name '*.chroot' \
+            | sort > "$CURRENT_PATHS"
+          comm -23 "$CURRENT_PATHS" "$SNAPSHOT_PATH" > "$EXPORT_DIR/store-paths.txt"
+          rm -f "$CURRENT_PATHS"
+        else
+          # Try magic-nix-cache's daemon.pid as a time reference
+          MNC_DAEMON_DIR="${MAGIC_NIX_CACHE_DAEMONDIR:-}"
+          MNC_PID_FILE="$MNC_DAEMON_DIR/daemon.pid"
+
+          if [ -f "$MNC_PID_FILE" ]; then
+            echo "Detecting new store paths since magic-nix-cache started..."
+            find "$STORE_DIR" -maxdepth 1 -mindepth 1 \
+              -not -name '.links' \
+              -not -name '*.drv' \
+              -not -name '*.chroot' \
+              -cnewer "$MNC_PID_FILE" \
+              | sort > "$EXPORT_DIR/store-paths.txt"
+          else
+            echo "::error::Either 'paths' input, a store snapshot from the setup action, or MAGIC_NIX_CACHE_DAEMONDIR is required"
+            exit 1
+          fi
+        fi
+
+        count=$(wc -l < "$EXPORT_DIR/store-paths.txt")
+        echo "Exporting $count store path(s)..."
+
+        # Export each path (and its closure) to a local binary cache
+        while IFS= read -r p; do
+          [ -z "$p" ] && continue
+          echo "  $p"
+          nix copy --to "file://$EXPORT_DIR/nix-cache" "$p" --no-check-sigs
+        done < "$EXPORT_DIR/store-paths.txt"
+
+        echo "export-dir=$EXPORT_DIR" >> "$GITHUB_OUTPUT"
+
+    - name: Sign exported paths
+      if: inputs.signing-key != ''
+      shell: bash
+      env:
+        SIGNING_KEY: ${{ inputs.signing-key }}
+        EXPORT_DIR: ${{ steps.export.outputs.export-dir }}
+      run: |
+        set -euo pipefail
+        KEY_FILE=$(mktemp)
+        chmod 600 "$KEY_FILE"
+        echo "$SIGNING_KEY" > "$KEY_FILE"
+        trap 'rm -f "$KEY_FILE"' EXIT
+
+        echo "Signing exported store paths..."
+        while IFS= read -r p; do
+          nix store sign --store "file://$EXPORT_DIR/nix-cache" --key-file "$KEY_FILE" --recursive "$p"
+        done < "$EXPORT_DIR/store-paths.txt"
+        echo "Signing complete"
+
+    - name: Upload artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: static-nix-cache-${{ inputs.name }}
+        path: ${{ steps.export.outputs.export-dir }}
+        retention-days: 1

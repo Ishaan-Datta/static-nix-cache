@@ -1,0 +1,43 @@
+name: 'static-nix-cache Setup'
+description: 'Snapshot the current Nix store so that new paths can be auto-detected later by the save or deploy actions'
+
+inputs:
+  store-dir:
+    description: 'Path to the Nix store directory'
+    required: false
+    default: '/nix/store'
+
+outputs:
+  snapshot-path:
+    description: 'Path to the file containing the initial store path snapshot'
+    value: ${{ steps.snapshot.outputs.snapshot-path }}
+
+runs:
+  using: composite
+  steps:
+    - name: Snapshot Nix store
+      id: snapshot
+      shell: bash
+      env:
+        STORE_DIR: ${{ inputs.store-dir }}
+      run: |
+        set -euo pipefail
+        SNAPSHOT_DIR="/tmp/static-nix-cache-setup"
+        mkdir -p "$SNAPSHOT_DIR"
+        SNAPSHOT_PATH="$SNAPSHOT_DIR/store-paths-before.txt"
+
+        if [ ! -d "$STORE_DIR" ]; then
+          echo "::warning::Nix store directory $STORE_DIR does not exist, creating empty snapshot"
+          : > "$SNAPSHOT_PATH"
+        else
+          # List all store paths (excluding .links, .drv, .chroot)
+          find "$STORE_DIR" -maxdepth 1 -mindepth 1 \
+            -not -name '.links' \
+            -not -name '*.drv' \
+            -not -name '*.chroot' \
+            | sort > "$SNAPSHOT_PATH"
+        fi
+
+        count=$(wc -l < "$SNAPSHOT_PATH")
+        echo "Recorded $count existing store path(s)"
+        echo "snapshot-path=$SNAPSHOT_PATH" >> "$GITHUB_OUTPUT"
