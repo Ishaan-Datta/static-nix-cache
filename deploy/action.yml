@@ -250,7 +250,12 @@ runs:
         while IFS= read -r p; do
           [ -z "$p" ] && continue
           echo "Pushing: $p"
-          nix copy ${copy_args[@]+"${copy_args[@]}"} --to "http://localhost:${PORT}?compression=${COMPRESSION}" --no-check-sigs "$p"
+          nix copy \
+            ${copy_args[@]+"${copy_args[@]}"} \
+            --http-connections 4 \
+            --to "http://localhost:${PORT}?compression=${COMPRESSION}" \
+            --no-check-sigs \
+            "$p"
         done < "$PATHS_FILE"
 
     - name: Generate static site

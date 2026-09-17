@@ -1,0 +1,67 @@
+# This replaces the Node install/server/push/generate/stop portion of the
+# original deploy/action.yml. Keep the original path-resolution / artifact
+# aggregation steps if you still want those behaviors.
+
+- name: Build local binary cache for publishing
+  shell: bash
+  env:
+    EXPORT_DIR: ${{ inputs.export-dir || steps.aggregate.outputs.export-dir }}
+    COMPRESSION: ${{ inputs.compression }}
+    SIGNING_KEY: ${{ inputs.signing-key }}
+  run: |
+    set -euo pipefail
+
+    PATHS_FILE="${{ steps.prepare.outputs.paths-file }}"
+    PUBLISH_CACHE="/tmp/static-nix-cache-publish"
+    rm -rf "$PUBLISH_CACHE"
+    mkdir -p "$PUBLISH_CACHE"
+
+    from_args=()
+    if [ -n "$EXPORT_DIR" ] && [ -d "$EXPORT_DIR" ]; then
+      from_args+=(--from "file://$EXPORT_DIR")
+      echo "Copying from exported binary cache: $EXPORT_DIR"
+    fi
+
+    while IFS= read -r p; do
+      [ -z "$p" ] && continue
+      echo "Exporting to local binary cache: $p"
+      nix copy \
+        "${from_args[@]}" \
+        --to "file://$PUBLISH_CACHE?compression=$COMPRESSION" \
+        --no-check-sigs \
+        "$p"
+    done < "$PATHS_FILE"
+
+    if [ -n "$SIGNING_KEY" ]; then
+      KEY_FILE=$(mktemp)
+      chmod 600 "$KEY_FILE"
+      printf '%s\n' "$SIGNING_KEY" > "$KEY_FILE"
+      trap 'rm -f "$KEY_FILE"' EXIT
+
+      while IFS= read -r p; do
+        [ -z "$p" ] && continue
+        nix store sign \
+          --store "file://$PUBLISH_CACHE" \
+          --key-file "$KEY_FILE" \
+          --recursive \
+          "$p"
+      done < "$PATHS_FILE"
+    fi
+
+- name: Publish local binary cache
+  shell: bash
+  env:
+    GITHUB_TOKEN: ${{ inputs.github-token }}
+    GITHUB_OWNER: ${{ inputs.github-owner }}
+    GITHUB_REPO: ${{ inputs.github-repo }}
+    GITHUB_RELEASE_TAG: ${{ inputs.github-release-tag }}
+    OUTPUT_DIR: ${{ inputs.static }}
+  run: |
+    set -euo pipefail
+
+    export GITHUB_OWNER="${GITHUB_OWNER:-${{ github.repository_owner }}}"
+    export GITHUB_REPO="${GITHUB_REPO:-${{ github.event.repository.name }}}"
+
+    "${{ github.action_path }}/../bin/static-nix-cache" publish \
+      --cache-dir /tmp/static-nix-cache-publish \
+      --output-dir "$OUTPUT_DIR"
