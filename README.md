@@ -1,23 +1,23 @@
 # static-nix-cache
 
-**Deploy a Nix binary cache for your project. For free.**
-
-static-nix-cache stores [Nix](https://nixos.org/) build artifacts (NARs) as GitHub Release assets and serves cache metadata via static hosting — giving you a fully functional [binary cache](https://nixos.wiki/wiki/Binary_Cache) at zero cost.
+Publish Nix binary caches to GitHub Releases and serve their metadata from any
+static host. No cache server runs in CI or production.
 
 ## How It Works
 
-1. **Build** your project with Nix in CI
-2. **Upload** NAR files to a GitHub Release (free binary storage)
-3. **Deploy** narinfo metadata as a static site to GitHub Pages
+1. Nix serializes store paths into NARs, applies the selected compression, and
+   writes matching `.narinfo` metadata into a local `file://` cache.
+2. The Rust publisher uploads NARs and durable narinfo metadata to a GitHub
+   Release.
+3. The publisher optionally writes a static cache index whose NAR URLs point
+   directly at the release assets.
 
-Your team gets fast, cached builds — no servers or cloud storage bills required.
+Compression remains a Nix responsibility so `Compression`, `FileHash`, and
+`FileSize` always describe the exact uploaded bytes.
 
-## Quick Start
-
-Add a workflow to your repository:
+## GitHub Action
 
 ```yaml
-# .github/workflows/cache.yml
 name: Deploy Cache
 
 on:
@@ -30,23 +30,19 @@ permissions:
   id-token: write
 
 jobs:
-  build-and-deploy:
+  cache:
     runs-on: ubuntu-latest
-    environment:
-      name: github-pages
-      url: ${{ steps.pages.outputs.page_url }}
     steps:
       - uses: actions/checkout@v4
       - uses: DeterminateSystems/nix-installer-action@main
+      - uses: Ishaan-Datta/static-nix-cache/setup@v0.1.0
 
-      - uses: randymarsh77/static-nix-cache/setup@v1
+      - run: nix build
 
-      - name: Build
-        run: nix build
-
-      - uses: randymarsh77/static-nix-cache/deploy@v1
+      - uses: Ishaan-Datta/static-nix-cache/deploy@v0.1.0
         with:
-          github-token: ${{ secrets.GITHUB_TOKEN }}
+          github-token: ${{ github.token }}
+          compression: zstd
           static: ./site
 
       - uses: actions/upload-pages-artifact@v3
@@ -54,31 +50,35 @@ jobs:
           path: ./site
 
       - uses: actions/deploy-pages@v4
-        id: pages
 ```
 
-No need to capture store paths manually — the **setup** action snapshots the Nix store before your build, and the **deploy** action auto-detects new paths by diffing the store.
+The deploy action downloads the matching Rust binary from the public `v0.1.0`
+release, verifies its checksum, and supports Linux and macOS on x86_64 and
+ARM64.
 
-Then point Nix at your cache:
+## Command Line
 
-```nix
-# flake.nix
-{
-  nixConfig.extra-substituters = [ "https://<owner>.github.io/<repo>/cache" ];
-}
+```bash
+nix copy --to 'file:///tmp/publish-cache?compression=zstd' /nix/store/...
+
+GITHUB_TOKEN=... static-nix-cache publish \
+  --cache-dir /tmp/publish-cache \
+  --owner example \
+  --repo project \
+  --output-dir ./site
 ```
 
-## Documentation
+Omit `--output-dir` when only release publication is needed. See
+[`docs/`](docs/) for action inputs, configuration, and static hosting details.
 
-Full documentation is available at **[randymarsh77.github.io/static-nix-cache](https://randymarsh77.github.io/static-nix-cache/)**.
+## Development
 
-- [Getting Started](https://randymarsh77.github.io/static-nix-cache/docs/getting-started)
-- [Configuration](https://randymarsh77.github.io/static-nix-cache/docs/configuration)
-- [Static Site Generation](https://randymarsh77.github.io/static-nix-cache/docs/static-site)
-- [Storage Backends](https://randymarsh77.github.io/static-nix-cache/docs/storage-backends)
-- [GitHub Actions](https://randymarsh77.github.io/static-nix-cache/docs/github-actions)
-- [Running the Server](https://randymarsh77.github.io/static-nix-cache/docs/server)
+```bash
+nix develop
+cargo test --locked
+nix build
+```
 
 ## License
 
-[ISC](LICENSE)
+[MIT](LICENSE)

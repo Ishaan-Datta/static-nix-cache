@@ -37,8 +37,8 @@ pub fn scan_local_cache(cache_dir: &Path) -> Result<Vec<LocalNarInfo>> {
 
         let raw = fs::read_to_string(&path)
             .with_context(|| format!("reading narinfo {}", path.display()))?;
-        let nar_url = extract_url(&raw)
-            .with_context(|| format!("narinfo {filename} has no URL field"))?;
+        let nar_url =
+            extract_url(&raw).with_context(|| format!("narinfo {filename} has no URL field"))?;
         let relative_nar_path = relative_nar_path(&nar_url)
             .with_context(|| format!("narinfo {filename} has unsupported URL: {nar_url}"))?;
         let nar_asset_name = relative_nar_path
@@ -85,16 +85,16 @@ fn relative_nar_path(value: &str) -> Result<PathBuf> {
         bail!("expected a relative URL in the local file cache");
     }
 
-    let path_part = value
-        .split(|c| c == '?' || c == '#')
-        .next()
-        .unwrap_or(value);
+    let path_part = value.split(['?', '#']).next().unwrap_or(value);
 
     let path = Path::new(path_part);
     if path.is_absolute() {
         bail!("absolute filesystem paths are not supported");
     }
-    if path.components().any(|component| matches!(component, std::path::Component::ParentDir)) {
+    if path
+        .components()
+        .any(|component| matches!(component, std::path::Component::ParentDir))
+    {
         bail!("parent-directory components are not supported");
     }
 
@@ -130,15 +130,12 @@ pub fn nar_asset_name_from_content(content: &str) -> Result<String> {
     if let Ok(url) = Url::parse(&value) {
         let segment = url
             .path_segments()
-            .and_then(|segments| segments.filter(|s| !s.is_empty()).last())
+            .and_then(|mut segments| segments.rfind(|s| !s.is_empty()))
             .context("absolute NAR URL has no filename")?;
         return Ok(segment.to_owned());
     }
 
-    let path_part = value
-        .split(|c| c == '?' || c == '#')
-        .next()
-        .unwrap_or(&value);
+    let path_part = value.split(['?', '#']).next().unwrap_or(&value);
     let name = Path::new(path_part)
         .file_name()
         .and_then(|v| v.to_str())
@@ -148,7 +145,10 @@ pub fn nar_asset_name_from_content(content: &str) -> Result<String> {
 
 #[cfg(test)]
 mod tests {
+    use std::fs;
+
     use super::*;
+    use tempfile::tempdir;
 
     #[test]
     fn extracts_relative_url() {
@@ -165,9 +165,42 @@ mod tests {
 
     #[test]
     fn rewrites_only_url_field() {
-        let raw = "StorePath: /nix/store/abc-pkg\nURL: nar/foo.nar.zst\nSig: key:sig\n";
+        let raw = "StorePath: /nix/store/abc-pkg\nURL: nar/foo.nar.zst\nCompression: zstd\nSig: key:sig\n";
         let rewritten = rewrite_url(raw, "https://example.test/foo.nar.zst").unwrap();
         assert!(rewritten.contains("URL: https://example.test/foo.nar.zst\n"));
+        assert!(rewritten.contains("Compression: zstd\n"));
         assert!(rewritten.contains("Sig: key:sig\n"));
+    }
+
+    #[test]
+    fn scans_supported_compression_variants() {
+        let cache = tempdir().unwrap();
+        fs::create_dir(cache.path().join("nar")).unwrap();
+
+        for (index, (extension, compression)) in
+            [("nar", "none"), ("nar.xz", "xz"), ("nar.zst", "zstd")]
+                .into_iter()
+                .enumerate()
+        {
+            let nar_name = format!("cache-{index}.{extension}");
+            fs::write(cache.path().join("nar").join(&nar_name), b"nar bytes").unwrap();
+            fs::write(
+                cache.path().join(format!("store-{index}.narinfo")),
+                format!("URL: nar/{nar_name}\nCompression: {compression}\n"),
+            )
+            .unwrap();
+        }
+
+        let entries = scan_local_cache(cache.path()).unwrap();
+        assert_eq!(entries.len(), 3);
+        assert!(entries
+            .iter()
+            .any(|entry| entry.raw.contains("Compression: none")));
+        assert!(entries
+            .iter()
+            .any(|entry| entry.raw.contains("Compression: xz")));
+        assert!(entries
+            .iter()
+            .any(|entry| entry.raw.contains("Compression: zstd")));
     }
 }
