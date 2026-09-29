@@ -8,7 +8,7 @@ use reqwest::StatusCode;
 use serde::{Deserialize, Serialize};
 use url::Url;
 
-const API_VERSION: &str = "2026-03-10";
+const API_VERSION: &str = "2022-11-28";
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct Release {
@@ -59,7 +59,9 @@ impl GitHub {
         let response = self.send(self.get(lookup))?;
 
         if response.status().is_success() {
-            return response.json().context("parsing GitHub release lookup response");
+            return response
+                .json()
+                .context("parsing GitHub release lookup response");
         }
 
         if response.status() != StatusCode::NOT_FOUND {
@@ -192,9 +194,15 @@ impl GitHub {
         let url = Url::parse(&asset.url).context("invalid asset API URL from GitHub")?;
         let response = self.send(self.get_binary(url))?;
         if !response.status().is_success() {
-            return response_error(response, &format!("downloading release asset {}", asset.name));
+            return response_error(
+                response,
+                &format!("downloading release asset {}", asset.name),
+            );
         }
-        Ok(response.bytes().context("reading GitHub release asset")?.to_vec())
+        Ok(response
+            .bytes()
+            .context("reading GitHub release asset")?
+            .to_vec())
     }
 
     pub fn release_download_url(&self, tag: &str, asset_name: &str) -> Result<String> {

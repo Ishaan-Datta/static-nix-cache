@@ -10,6 +10,7 @@ use clap::{Args, Parser, Subcommand};
 #[derive(Debug, Parser)]
 #[command(name = "static-nix-cache")]
 #[command(about = "Publish a local Nix binary cache without running an HTTP upload server")]
+#[command(version)]
 struct Cli {
     #[command(subcommand)]
     command: Command,
@@ -29,7 +30,7 @@ struct PublishArgs {
 
     /// Directory to populate with nix-cache-info and .narinfo files.
     #[arg(long)]
-    output_dir: PathBuf,
+    output_dir: Option<PathBuf>,
 
     /// GitHub repository owner. Defaults to the owner from GITHUB_REPOSITORY.
     #[arg(long, env = "GITHUB_OWNER")]

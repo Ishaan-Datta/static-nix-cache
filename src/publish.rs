@@ -5,14 +5,12 @@ use std::path::{Path, PathBuf};
 use anyhow::{bail, Context, Result};
 
 use crate::github::{Asset, GitHub};
-use crate::narinfo::{
-    nar_asset_name_from_content, rewrite_url, scan_local_cache, LocalNarInfo,
-};
+use crate::narinfo::{nar_asset_name_from_content, rewrite_url, scan_local_cache, LocalNarInfo};
 
 #[derive(Debug)]
 pub struct PublishOptions {
     pub cache_dir: PathBuf,
-    pub output_dir: PathBuf,
+    pub output_dir: Option<PathBuf>,
     pub owner: String,
     pub repo: String,
     pub token: String,
@@ -31,7 +29,11 @@ pub fn publish(options: PublishOptions) -> Result<()> {
         );
     }
 
-    let github = GitHub::new(options.token, options.owner.clone(), options.repo.clone())?;
+    let github = GitHub::new(
+        options.token.clone(),
+        options.owner.clone(),
+        options.repo.clone(),
+    )?;
     let release = github.get_or_create_release(&options.release_tag)?;
     eprintln!("using GitHub release id={}", release.id);
 
@@ -48,25 +50,34 @@ pub fn publish(options: PublishOptions) -> Result<()> {
         sync_narinfo(&github, release.id, &mut assets, narinfo)?;
     }
 
-    // Refresh after uploads so static generation sees metadata from this job plus
-    // previous/matrix jobs.
-    let final_assets = github.list_assets(release.id)?;
-    let final_index = index_assets(final_assets.clone());
+    if let Some(output_dir) = &options.output_dir {
+        // Refresh after uploads so static generation sees metadata from this job
+        // plus previous/matrix jobs.
+        let final_assets = github.list_assets(release.id)?;
+        let final_index = index_assets(final_assets.clone());
 
-    generate_static_site(
-        &github,
-        &options,
-        &local_narinfos,
-        &final_assets,
-        &final_index,
-    )?;
+        generate_static_site(
+            &github,
+            &options,
+            output_dir,
+            &local_narinfos,
+            &final_assets,
+            &final_index,
+        )?;
 
-    eprintln!(
-        "published {} local narinfo file(s), {} unique NAR(s); static site: {}",
-        local_narinfos.len(),
-        local_nars.len(),
-        options.output_dir.display()
-    );
+        eprintln!(
+            "published {} local narinfo file(s), {} unique NAR(s); static site: {}",
+            local_narinfos.len(),
+            local_nars.len(),
+            output_dir.display()
+        );
+    } else {
+        eprintln!(
+            "published {} local narinfo file(s), {} unique NAR(s)",
+            local_narinfos.len(),
+            local_nars.len()
+        );
+    }
 
     Ok(())
 }
@@ -162,24 +173,23 @@ fn sync_narinfo(
 fn generate_static_site(
     github: &GitHub,
     options: &PublishOptions,
+    output_dir: &Path,
     local_narinfos: &[LocalNarInfo],
     all_assets: &[Asset],
     asset_index: &HashMap<String, Asset>,
 ) -> Result<()> {
-    fs::create_dir_all(&options.output_dir)
-        .with_context(|| format!("creating output directory {}", options.output_dir.display()))?;
+    fs::create_dir_all(output_dir)
+        .with_context(|| format!("creating output directory {}", output_dir.display()))?;
 
     let cache_info = format!(
         "StoreDir: {}\nWantMassQuery: 1\nPriority: {}\n",
         options.store_dir, options.priority
     );
-    fs::write(options.output_dir.join("nix-cache-info"), cache_info)
-        .context("writing nix-cache-info")?;
+    fs::write(output_dir.join("nix-cache-info"), cache_info).context("writing nix-cache-info")?;
 
     // Disable Jekyll processing on GitHub Pages. The cache is already a complete
     // static tree and should be served byte-for-byte.
-    fs::write(options.output_dir.join(".nojekyll"), b"")
-        .context("writing .nojekyll")?;
+    fs::write(output_dir.join(".nojekyll"), b"").context("writing .nojekyll")?;
 
     let local_by_name: HashMap<&str, &LocalNarInfo> = local_narinfos
         .iter()
@@ -214,7 +224,7 @@ fn generate_static_site(
         let absolute_nar_url =
             github.release_download_url(&options.release_tag, &nar_asset_name)?;
         let output = rewrite_url(&raw, &absolute_nar_url)?;
-        fs::write(options.output_dir.join(&asset.name), output)
+        fs::write(output_dir.join(&asset.name), output)
             .with_context(|| format!("writing static narinfo {}", asset.name))?;
         generated += 1;
     }
@@ -228,8 +238,7 @@ fn generate_static_site(
             .strip_suffix(marker)
             .context("constructed GitHub release URL does not end in marker")?;
         let redirects = format!("/nar/:filename {base}:filename 302\n");
-        fs::write(options.output_dir.join("_redirects"), redirects)
-            .context("writing _redirects")?;
+        fs::write(output_dir.join("_redirects"), redirects).context("writing _redirects")?;
     }
 
     eprintln!("generated {generated} static narinfo file(s)");
