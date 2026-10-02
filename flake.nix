@@ -37,7 +37,7 @@
         pkgs = import nixpkgs { inherit system; };
         fenixPkgs = fenix.packages.${system};
 
-        rustToolchain = fenixPkgs.combine [
+        rustComponents = [
           fenixPkgs.stable.rustc
           fenixPkgs.stable.cargo
           fenixPkgs.stable.clippy
@@ -45,6 +45,14 @@
           fenixPkgs.stable.rust-src
           fenixPkgs.stable.rust-std
         ];
+        rustToolchain = fenixPkgs.combine rustComponents;
+        releaseRustToolchain = fenixPkgs.combine (
+          rustComponents
+          ++ nixpkgs.lib.optionals pkgs.stdenv.hostPlatform.isLinux [
+            fenixPkgs.targets.x86_64-unknown-linux-musl.stable.rust-std
+            fenixPkgs.targets.aarch64-unknown-linux-musl.stable.rust-std
+          ]
+        );
 
         staticNixCache = pkgs.callPackage ./package.nix { inherit rev; };
 
@@ -60,9 +68,18 @@
             staticNixCache
           ];
         };
+
+        releaseDevShell = pkgs.mkShell {
+          buildInputs = [ releaseRustToolchain ]
+          ++ nixpkgs.lib.optionals pkgs.stdenv.hostPlatform.isLinux [
+            pkgs.cargo-zigbuild
+            pkgs.zig
+          ];
+        };
       in
       {
         devShells.default = devShell;
+        devShells.release = releaseDevShell;
 
         packages = {
           static-nix-cache = staticNixCache;
