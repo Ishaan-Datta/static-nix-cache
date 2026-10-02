@@ -33,21 +33,20 @@ jobs:
   cache:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - uses: DeterminateSystems/nix-installer-action@main
       - uses: Ishaan-Datta/static-nix-cache/setup@v0.1.0
 
       - run: nix build
 
-      - uses: Ishaan-Datta/static-nix-cache/deploy@v0.1.0
+      - id: cache
+        uses: Ishaan-Datta/static-nix-cache/deploy@v0.1.0
         with:
-          github-token: ${{ github.token }}
           compression: zstd
-          static: ./site
 
-      - uses: actions/upload-pages-artifact@v3
+      - uses: actions/upload-pages-artifact@v4
         with:
-          path: ./site
+          path: ${{ steps.cache.outputs.static-path }}
 
       - uses: actions/deploy-pages@v4
 ```
@@ -55,6 +54,10 @@ jobs:
 The deploy action downloads the matching Rust binary from the public `v0.1.0`
 release, verifies its checksum, and supports Linux and macOS on x86_64 and
 ARM64.
+
+GitHub Pages is used only to serve `nix-cache-info` and `.narinfo` files. This
+project has no documentation website; all project documentation lives in the
+Markdown files under [`docs/`](docs/).
 
 ## Command Line
 
