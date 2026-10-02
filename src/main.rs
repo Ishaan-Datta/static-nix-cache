@@ -55,10 +55,6 @@ struct PublishArgs {
     /// Binary cache priority; lower values have higher priority in Nix.
     #[arg(long, env = "CACHE_PRIORITY", default_value_t = 30)]
     priority: u32,
-
-    /// Do not write the compatibility _redirects file.
-    #[arg(long, default_value_t = false)]
-    no_redirects_file: bool,
 }
 
 fn main() {
@@ -83,7 +79,6 @@ fn real_main() -> Result<()> {
                 release_tag: args.release_tag,
                 store_dir: args.store_dir,
                 priority: args.priority,
-                write_redirects_file: !args.no_redirects_file,
             };
             publish::publish(options)
         }
