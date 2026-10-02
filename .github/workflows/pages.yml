@@ -1,4 +1,4 @@
-name: Deploy Cache
+name: Build and publish Nix cache
 
 on:
   push:
@@ -6,51 +6,78 @@ on:
   workflow_dispatch:
 
 concurrency:
-  group: pages-production
-  cancel-in-progress: true
+  group: nix-cache
+  cancel-in-progress: false
 
 jobs:
-  build:
+  publish:
+    name: Publish package and dev shell
     runs-on: ubuntu-latest
     permissions:
       contents: write
-    env:
-      GITHUB_OWNER: ${{ github.repository_owner }}
-      GITHUB_REPO: ${{ github.event.repository.name }}
-      GITHUB_RELEASE_TAG: nix-cache
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - uses: DeterminateSystems/nix-installer-action@main
 
-      - name: Build static-nix-cache
-        run: nix build .#default --print-out-paths --accept-flake-config | tee "$RUNNER_TEMP/store-paths.txt"
+      - name: Build package and development shell
+        run: |
+          set -euo pipefail
+          system=$(nix eval --impure --raw --expr builtins.currentSystem)
+          package=$(nix build .#default --no-link --print-build-logs --print-out-paths)
+          dev_shell=$(nix build ".#devShells.${system}.default" \
+            --no-link \
+            --print-build-logs \
+            --print-out-paths)
+          printf '%s\n%s\n' "$package" "$dev_shell" > "$RUNNER_TEMP/store-paths.txt"
+          echo "publisher=$package/bin/static-nix-cache" >> "$GITHUB_ENV"
 
-      - name: Build compressed local cache
+      - name: Build compressed file cache
+        env:
+          SIGNING_KEY: ${{ secrets.NIX_CACHE_SIGNING_KEY }}
         run: |
           set -euo pipefail
           cache_dir="$RUNNER_TEMP/publish-cache"
           mkdir -p "$cache_dir"
+
           while IFS= read -r path; do
             [ -z "$path" ] && continue
-            nix copy \
-              --to "file://${cache_dir}?compression=zstd" \
-              "$path"
+            nix copy --to "file://${cache_dir}?compression=zstd" "$path"
           done < "$RUNNER_TEMP/store-paths.txt"
 
-      - name: Publish cache
+          if [ -n "$SIGNING_KEY" ]; then
+            key_file=$(mktemp "$RUNNER_TEMP/static-nix-cache-key.XXXXXX")
+            chmod 600 "$key_file"
+            printf '%s\n' "$SIGNING_KEY" > "$key_file"
+            trap 'rm -f "$key_file"' EXIT
+
+            while IFS= read -r path; do
+              [ -z "$path" ] && continue
+              nix store sign \
+                --store "file://${cache_dir}" \
+                --key-file "$key_file" \
+                --recursive \
+                "$path"
+            done < "$RUNNER_TEMP/store-paths.txt"
+          fi
+
+      - name: Publish cache assets and metadata
         env:
+          GITHUB_OWNER: ${{ github.repository_owner }}
+          GITHUB_REPO: ${{ github.event.repository.name }}
+          GITHUB_RELEASE_TAG: nix-cache
           GITHUB_TOKEN: ${{ github.token }}
         run: |
-          ./result/bin/static-nix-cache publish \
+          "$publisher" publish \
             --cache-dir "$RUNNER_TEMP/publish-cache" \
-            --output-dir "$RUNNER_TEMP/nix-cache-static"
+            --output-dir "$RUNNER_TEMP/static-cache"
 
-      - uses: actions/upload-pages-artifact@v3
+      - uses: actions/upload-pages-artifact@v4
         with:
-          path: ${{ runner.temp }}/nix-cache-static
+          path: ${{ runner.temp }}/static-cache
 
   deploy:
-    needs: build
+    name: Deploy static cache
+    needs: publish
     runs-on: ubuntu-latest
     permissions:
       pages: write
@@ -58,6 +85,51 @@ jobs:
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
+    outputs:
+      cache-url: ${{ steps.deployment.outputs.page_url }}
     steps:
       - id: deployment
         uses: actions/deploy-pages@v4
+
+  dogfood:
+    name: Substitute package and dev shell
+    needs: [publish, deploy]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: DeterminateSystems/nix-installer-action@main
+
+      - name: Build exclusively from the published cache
+        env:
+          CACHE_URL: ${{ needs.deploy.outputs.cache-url }}
+          CACHE_PUBLIC_KEY: ${{ vars.NIX_CACHE_PUBLIC_KEY }}
+        run: |
+          set -euo pipefail
+          CACHE_URL=${CACHE_URL%/}
+          curl --fail --location --silent --show-error \
+            --retry 10 \
+            --retry-all-errors \
+            "$CACHE_URL/nix-cache-info" >/dev/null
+
+          system=$(nix eval --impure --raw --expr builtins.currentSystem)
+          options=(
+            --option substituters "$CACHE_URL"
+            --option max-jobs 0
+          )
+
+          if [ -n "$CACHE_PUBLIC_KEY" ]; then
+            options+=(--option trusted-public-keys "$CACHE_PUBLIC_KEY")
+          else
+            echo "::warning::NIX_CACHE_PUBLIC_KEY is not configured; checking cache transport without signatures"
+            options+=(--option require-sigs false)
+          fi
+
+          nix build \
+            .#default \
+            ".#devShells.${system}.default" \
+            --no-link \
+            --print-build-logs \
+            "${options[@]}"
+
+      - name: Run the substituted development shell
+        run: nix develop --command static-nix-cache --version
