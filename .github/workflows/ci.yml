@@ -1,8 +1,8 @@
 name: CI
 
 on:
+  workflow_dispatch:
   push:
-    branches: [master]
   pull_request:
     branches: [master]
 
@@ -10,24 +10,36 @@ permissions:
   contents: read
 
 jobs:
-  rust:
+  format:
+    name: Format
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          components: clippy,rustfmt
-      - uses: Swatinem/rust-cache@v2
-      - run: cargo fmt --check
-      - run: cargo clippy --locked --all-targets -- -D warnings
-      - run: cargo test --locked
-      - run: cargo build --release --locked
-
-  nix:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - uses: DeterminateSystems/nix-installer-action@main
-      - run: nix flake check --accept-flake-config
-      - run: nix build --accept-flake-config
+      - run: nix develop --command cargo fmt --check
+
+  clippy:
+    name: Clippy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: DeterminateSystems/nix-installer-action@main
+      - run: nix develop --command cargo clippy --locked --all-targets -- -D warnings
+
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: DeterminateSystems/nix-installer-action@main
+      - run: nix develop --command cargo test --locked
+
+  build:
+    name: Build Nix package
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: DeterminateSystems/nix-installer-action@main
+      - run: nix flake check --no-build
+      - run: nix build --print-build-logs
       - run: ./result/bin/static-nix-cache --version
