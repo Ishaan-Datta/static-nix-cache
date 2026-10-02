@@ -23,7 +23,6 @@ GitHub Release
 static output / GitHub Pages
   nix-cache-info
   <store-hash>.narinfo     (URL rewritten to absolute Release URL)
-  .nojekyll
 ```
 
 ## Why raw narinfo is stored on the release

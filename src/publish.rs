@@ -17,7 +17,6 @@ pub struct PublishOptions {
     pub release_tag: String,
     pub store_dir: String,
     pub priority: u32,
-    pub write_redirects_file: bool,
 }
 
 pub fn publish(options: PublishOptions) -> Result<()> {
@@ -187,10 +186,6 @@ fn generate_static_site(
     );
     fs::write(output_dir.join("nix-cache-info"), cache_info).context("writing nix-cache-info")?;
 
-    // Disable Jekyll processing on GitHub Pages. The cache is already a complete
-    // static tree and should be served byte-for-byte.
-    fs::write(output_dir.join(".nojekyll"), b"").context("writing .nojekyll")?;
-
     let local_by_name: HashMap<&str, &LocalNarInfo> = local_narinfos
         .iter()
         .map(|entry| (entry.filename.as_str(), entry))
@@ -227,18 +222,6 @@ fn generate_static_site(
         fs::write(output_dir.join(&asset.name), output)
             .with_context(|| format!("writing static narinfo {}", asset.name))?;
         generated += 1;
-    }
-
-    if options.write_redirects_file {
-        // Retained for compatibility with Cloudflare Pages. The rewritten absolute
-        // URL fields mean Nix does not depend on this file, including on GitHub Pages.
-        let marker = "__STATIC_NIX_CACHE_ASSET__";
-        let example = github.release_download_url(&options.release_tag, marker)?;
-        let base = example
-            .strip_suffix(marker)
-            .context("constructed GitHub release URL does not end in marker")?;
-        let redirects = format!("/nar/:filename {base}:filename 302\n");
-        fs::write(output_dir.join("_redirects"), redirects).context("writing _redirects")?;
     }
 
     eprintln!("generated {generated} static narinfo file(s)");

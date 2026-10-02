@@ -12,7 +12,6 @@
 | `--release-tag` | `GITHUB_RELEASE_TAG` | `nix-cache` | NAR release tag |
 | `--store-dir` | `STORE_DIR` | `/nix/store` | Store path advertised by `nix-cache-info` |
 | `--priority` | `CACHE_PRIORITY` | `30` | Nix binary-cache priority |
-| `--no-redirects-file` | | false | Skip the compatibility `_redirects` file |
 
 Repository context falls back to `GITHUB_REPOSITORY=owner/repo` when owner and
 repository are not supplied explicitly.
