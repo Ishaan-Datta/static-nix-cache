@@ -1,7 +1,10 @@
 name: "static-nix-cache Deploy"
-description: "Publish newly built Nix store paths to GitHub Releases"
+description: "Publish Nix build results as a static binary cache and deploy it to GitHub Pages"
 
 inputs:
+  paths:
+    description: "Newline-separated build result paths. Defaults to local result and result-* links."
+    required: false
   signing-key:
     description: "Nix signing key (keyname:base64-ed25519-private)"
     required: false
@@ -9,17 +12,62 @@ inputs:
     description: "Compression type for nix copy (none, xz, zstd)"
     required: false
     default: "zstd"
+  deploy-pages:
+    description: "Upload and deploy the generated metadata to GitHub Pages"
+    required: false
+    default: "true"
 
 outputs:
   static-path:
     description: "Directory containing the static binary cache metadata"
     value: ${{ steps.publish.outputs.static-path }}
+  page-url:
+    description: "URL of the GitHub Pages deployment"
+    value: ${{ steps.pages.outputs.page_url }}
 
 runs:
   using: composite
   steps:
+    - name: Resolve local build results
+      id: local-paths
+      shell: bash
+      env:
+        INPUT_PATHS: ${{ inputs.paths }}
+      run: |
+        set -euo pipefail
+        paths_file="$RUNNER_TEMP/static-nix-cache-local-paths.txt"
+        : > "$paths_file"
+
+        if [ -n "$INPUT_PATHS" ]; then
+          while IFS= read -r path; do
+            [ -z "$path" ] && continue
+            case "$path" in
+              /*|./*|../*) ;;
+              *) path="./$path" ;;
+            esac
+            nix path-info "$path" >> "$paths_file"
+          done <<< "$INPUT_PATHS"
+        else
+          shopt -s nullglob
+          for path in result result-*; do
+            [ -e "$path" ] || [ -L "$path" ] || continue
+            nix path-info "./$path" >> "$paths_file"
+          done
+        fi
+
+        sort -u -o "$paths_file" "$paths_file"
+        if [ -s "$paths_file" ]; then
+          count=$(wc -l < "$paths_file")
+          echo "Found $count local build result(s)"
+          echo "found=true" >> "$GITHUB_OUTPUT"
+          echo "paths-file=$paths_file" >> "$GITHUB_OUTPUT"
+        else
+          echo "found=false" >> "$GITHUB_OUTPUT"
+        fi
+
     - name: Try restoring saved caches
       id: try-restore
+      if: steps.local-paths.outputs.found != 'true'
       continue-on-error: true
       uses: actions/download-artifact@v4
       with:
@@ -28,7 +76,7 @@ runs:
 
     - name: Aggregate restored caches
       id: aggregate
-      if: steps.try-restore.outcome == 'success'
+      if: steps.local-paths.outputs.found != 'true' && steps.try-restore.outcome == 'success'
       shell: bash
       run: |
         set -euo pipefail
@@ -66,45 +114,21 @@ runs:
       id: prepare
       shell: bash
       env:
+        LOCAL_FOUND: ${{ steps.local-paths.outputs.found }}
+        LOCAL_PATHS_FILE: ${{ steps.local-paths.outputs.paths-file }}
         RESTORED_FOUND: ${{ steps.aggregate.outputs.found }}
         RESTORED_PATHS_FILE: ${{ steps.aggregate.outputs.paths-file }}
       run: |
         set -euo pipefail
         paths_file="$RUNNER_TEMP/static-nix-cache-deploy-paths.txt"
-        snapshot_path="/tmp/static-nix-cache-setup/store-paths-before.txt"
-        store_dir="/nix/store"
 
-        if [ "$RESTORED_FOUND" = "true" ] && [ -f "$RESTORED_PATHS_FILE" ]; then
+        if [ "$LOCAL_FOUND" = "true" ] && [ -f "$LOCAL_PATHS_FILE" ]; then
+          cp "$LOCAL_PATHS_FILE" "$paths_file"
+        elif [ "$RESTORED_FOUND" = "true" ] && [ -f "$RESTORED_PATHS_FILE" ]; then
           cp "$RESTORED_PATHS_FILE" "$paths_file"
-        elif [ -f "$snapshot_path" ]; then
-          current_paths=$(mktemp "$RUNNER_TEMP/static-nix-cache-paths.XXXXXX")
-          find "$store_dir" -maxdepth 1 -mindepth 1 \
-            -not -name '.links' \
-            -not -name '*.drv' \
-            -not -name '*.chroot' \
-            | sort > "$current_paths"
-          comm -23 "$current_paths" "$snapshot_path" > "$paths_file"
-          rm -f "$current_paths"
         else
-          mnc_addr="127.0.0.1:37515"
-          if curl --fail --silent --request POST \
-            "http://${mnc_addr}/api/workflow-finish" >/dev/null; then
-            mnc_pid_file="${MAGIC_NIX_CACHE_DAEMONDIR:-}/daemon.pid"
-            if [ -f "$mnc_pid_file" ]; then
-              find "$store_dir" -maxdepth 1 -mindepth 1 \
-                -not -name '.links' \
-                -not -name '*.drv' \
-                -not -name '*.chroot' \
-                -cnewer "$mnc_pid_file" \
-                | sort > "$paths_file"
-            else
-              echo "::error::magic-nix-cache is running but MAGIC_NIX_CACHE_DAEMONDIR is not set"
-              exit 1
-            fi
-          else
-            echo "::error::Could not detect store paths. Run the setup action before building, use save in build jobs, or run magic-nix-cache."
-            exit 1
-          fi
+          echo "::error::No build results found. Keep nix build's result link or pass the paths input."
+          exit 1
         fi
 
         count=$(wc -l < "$paths_file")
@@ -241,3 +265,14 @@ runs:
           --cache-dir "$CACHE_DIR" \
           --output-dir "$static_path"
         echo "static-path=$static_path" >> "$GITHUB_OUTPUT"
+
+    - name: Upload static cache to GitHub Pages
+      if: inputs.deploy-pages == 'true'
+      uses: actions/upload-pages-artifact@v4
+      with:
+        path: ${{ steps.publish.outputs.static-path }}
+
+    - name: Deploy static cache to GitHub Pages
+      id: pages
+      if: inputs.deploy-pages == 'true'
+      uses: actions/deploy-pages@v4
