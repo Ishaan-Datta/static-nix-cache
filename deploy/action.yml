@@ -143,8 +143,8 @@ runs:
       if: inputs.binary == ''
       shell: bash
       env:
-        STATIC_NIX_CACHE_REPOSITORY: Ishaan-Datta/static-nix-cache
-        STATIC_NIX_CACHE_VERSION: v0.1.0
+        STATIC_NIX_CACHE_REPOSITORY: ${{ github.action_repository }}
+        STATIC_NIX_CACHE_VERSION: ${{ github.action_ref }}
       run: |
         set -euo pipefail
         case "${RUNNER_OS}:${RUNNER_ARCH}" in

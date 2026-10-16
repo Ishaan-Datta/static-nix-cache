@@ -37,6 +37,9 @@ jobs:
       - run: nix build
       - id: cache
         uses: Ishaan-Datta/static-nix-cache/deploy@v0.1.0
+        with:
+          # Omit `signing-key` if you want an unsigned cache
+          signing-key: ${{ secrets.NIX_CACHE_SIGNING_KEY }}
 ```
 
 That final action is the complete publishing pipeline. It:
@@ -48,18 +51,22 @@ That final action is the complete publishing pipeline. It:
 4. Generates the static cache index, uploads it as a Pages artifact, and
    deploys it.
 
-The permissions must remain in the workflow because a GitHub Action cannot
-grant permissions to itself. Use `paths` when the build does not leave standard
-result links:
+Use `paths` when the build does not leave standard result links:
 
 ```yaml
-- run: nix build .#package -o package-result
-- uses: Ishaan-Datta/static-nix-cache/deploy@v0.1.0
-  with:
-    paths: package-result
-```
+- name: Build packages
+  run: |
+    nix build .#package -o package-result
+    nix build .#documentation -o documentation-result
+    nix build .#container -o container-result
 
-Multiple paths can be provided one per line.
+- uses: Ishaan-Datta/static-nix-cache/deploy@v1.0.1
+  with:
+    paths: |
+      package-result
+      documentation-result
+      container-result
+```
 
 ## Use The Cache
 
@@ -77,17 +84,7 @@ Add it to a flake:
 }
 ```
 
-For a signed cache, store the private key in a GitHub Actions secret and pass
-it to the action:
-
-```yaml
-- id: cache
-  uses: Ishaan-Datta/static-nix-cache/deploy@v0.1.0
-  with:
-    signing-key: ${{ secrets.NIX_CACHE_SIGNING_KEY }}
-```
-
-Consumers must add the corresponding public key to
+For a signed cache, consumers must add the corresponding public key to
 `extra-trusted-public-keys`.
 
 ## Action Options
@@ -101,10 +98,6 @@ Consumers must add the corresponding public key to
 
 The action outputs `page-url` and `static-path`. When `deploy-pages` is false,
 `static-path` can be uploaded to any static host without modification.
-
-The action supports Linux and macOS runners on x86_64 and ARM64. It downloads
-the matching checksum-verified publisher binary and requires Nix to already be
-installed.
 
 ## Matrix Builds
 
