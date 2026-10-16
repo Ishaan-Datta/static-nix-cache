@@ -2,7 +2,7 @@
 name = "static-nix-cache"
 version = "0.1.0"
 edition = "2021"
-license = "MIT"
+license = "GPL-2.0-only"
 description = "Publish a local Nix binary cache to GitHub Releases and static hosting"
 
 [dependencies]

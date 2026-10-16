@@ -37,6 +37,7 @@ jobs:
             --print-build-logs \
             --print-out-paths)
           {
+            echo "binary=$package/bin/static-nix-cache"
             echo 'paths<<EOF'
             printf '%s\n%s\n' "$package" "$dev_shell"
             echo EOF
@@ -46,6 +47,7 @@ jobs:
         id: cache
         uses: ./deploy
         with:
+          binary: ${{ steps.build.outputs.binary }}
           paths: ${{ steps.build.outputs.paths }}
           signing-key: ${{ secrets.NIX_CACHE_SIGNING_KEY }}
 

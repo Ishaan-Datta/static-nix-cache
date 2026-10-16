@@ -92,12 +92,12 @@ Consumers must add the corresponding public key to
 
 ## Action Options
 
-| Input | Default | Description |
-| --- | --- | --- |
-| `paths` | `result`, `result-*` | Newline-separated build result paths |
-| `compression` | `zstd` | NAR compression: `none`, `xz`, or `zstd` |
-| `signing-key` | | Nix secret key in `keyname:base64-ed25519-private` format |
-| `deploy-pages` | `true` | Set to `false` to publish without deploying Pages |
+| Input          | Default              | Description                                               |
+| -------------- | -------------------- | --------------------------------------------------------- |
+| `paths`        | `result`, `result-*` | Newline-separated build result paths                      |
+| `compression`  | `zstd`               | NAR compression: `none`, `xz`, or `zstd`                  |
+| `signing-key`  |                      | Nix secret key in `keyname:base64-ed25519-private` format |
+| `deploy-pages` | `true`               | Set to `false` to publish without deploying Pages         |
 
 The action outputs `page-url` and `static-path`. When `deploy-pages` is false,
 `static-path` can be uploaded to any static host without modification.
@@ -159,16 +159,16 @@ GITHUB_TOKEN=... static-nix-cache publish \
   --output-dir ./site
 ```
 
-| Option | Environment | Default | Description |
-| --- | --- | --- | --- |
-| `--cache-dir` | | required | Cache produced by `nix copy --to file://...` |
-| `--output-dir` | | | Static metadata output directory |
-| `--owner` | `GITHUB_OWNER` | repository context | Destination owner |
-| `--repo` | `GITHUB_REPO` | repository context | Destination repository |
-| `--token` | `GITHUB_TOKEN` | required | Token with `contents: write` |
-| `--release-tag` | `GITHUB_RELEASE_TAG` | `nix-cache` | Release containing cache assets |
-| `--store-dir` | `STORE_DIR` | `/nix/store` | Store directory advertised to Nix |
-| `--priority` | `CACHE_PRIORITY` | `30` | Binary cache priority |
+| Option          | Environment          | Default            | Description                                  |
+| --------------- | -------------------- | ------------------ | -------------------------------------------- |
+| `--cache-dir`   |                      | required           | Cache produced by `nix copy --to file://...` |
+| `--output-dir`  |                      |                    | Static metadata output directory             |
+| `--owner`       | `GITHUB_OWNER`       | repository context | Destination owner                            |
+| `--repo`        | `GITHUB_REPO`        | repository context | Destination repository                       |
+| `--token`       | `GITHUB_TOKEN`       | required           | Token with `contents: write`                 |
+| `--release-tag` | `GITHUB_RELEASE_TAG` | `nix-cache`        | Release containing cache assets              |
+| `--store-dir`   | `STORE_DIR`          | `/nix/store`       | Store directory advertised to Nix            |
+| `--priority`    | `CACHE_PRIORITY`     | `30`               | Binary cache priority                        |
 
 `GITHUB_REPOSITORY=owner/repo` supplies the owner and repository when they are
 not passed explicitly. Compression is selected when creating the local cache;
@@ -187,14 +187,6 @@ GitHub limits a release to 1,000 assets and each asset to 2 GiB. This design
 therefore supports roughly 500 store paths per repository release. Release
 downloads also need to be publicly accessible to ordinary Nix clients.
 
-## Development
-
-```bash
-nix develop
-cargo test --locked
-nix build
-```
-
 ## License
 
-[MIT](LICENSE)
+[GNU General Public License v2.0 only](LICENSE)

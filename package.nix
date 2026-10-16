@@ -20,7 +20,7 @@ rustPlatform.buildRustPackage {
   meta = {
     inherit (cargoToml.package) description;
     homepage = "https://github.com/Ishaan-Datta/static-nix-cache";
-    license = lib.licenses.mit;
+    license = lib.licenses.gpl2Only;
     mainProgram = "static-nix-cache";
     platforms = lib.platforms.unix;
   };
