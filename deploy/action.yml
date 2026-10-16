@@ -2,6 +2,9 @@ name: "static-nix-cache Deploy"
 description: "Publish Nix build results as a static binary cache and deploy it to GitHub Pages"
 
 inputs:
+  binary:
+    description: "Path to a static-nix-cache binary. Defaults to the released binary for this action version."
+    required: false
   paths:
     description: "Newline-separated build result paths. Defaults to local result and result-* links."
     required: false
@@ -137,6 +140,7 @@ runs:
 
     - name: Install static-nix-cache
       id: install
+      if: inputs.binary == ''
       shell: bash
       env:
         STATIC_NIX_CACHE_REPOSITORY: Ishaan-Datta/static-nix-cache
@@ -252,7 +256,7 @@ runs:
       id: publish
       shell: bash
       env:
-        BINARY: ${{ steps.install.outputs.binary }}
+        BINARY: ${{ inputs.binary || steps.install.outputs.binary }}
         CACHE_DIR: ${{ steps.cache.outputs.directory }}
         GITHUB_OWNER: ${{ github.repository_owner }}
         GITHUB_REPO: ${{ github.event.repository.name }}
