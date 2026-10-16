@@ -37,6 +37,9 @@ jobs:
       - run: nix build
       - id: cache
         uses: Ishaan-Datta/static-nix-cache/deploy@v0.1.0
+        with:
+          # Omit `signing-key` if you want an unsigned cache
+          signing-key: ${{ secrets.NIX_CACHE_SIGNING_KEY }}
 ```
 
 That final action is the complete publishing pipeline. It:
@@ -48,9 +51,7 @@ That final action is the complete publishing pipeline. It:
 4. Generates the static cache index, uploads it as a Pages artifact, and
    deploys it.
 
-The permissions must remain in the workflow because a GitHub Action cannot
-grant permissions to itself. Use `paths` when the build does not leave standard
-result links:
+Use `paths` when the build does not leave standard result links:
 
 ```yaml
 - run: nix build .#package -o package-result
@@ -77,17 +78,7 @@ Add it to a flake:
 }
 ```
 
-For a signed cache, store the private key in a GitHub Actions secret and pass
-it to the action:
-
-```yaml
-- id: cache
-  uses: Ishaan-Datta/static-nix-cache/deploy@v0.1.0
-  with:
-    signing-key: ${{ secrets.NIX_CACHE_SIGNING_KEY }}
-```
-
-Consumers must add the corresponding public key to
+For a signed cache, consumers must add the corresponding public key to
 `extra-trusted-public-keys`.
 
 ## Action Options
