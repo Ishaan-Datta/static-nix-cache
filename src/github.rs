@@ -13,6 +13,9 @@ const API_VERSION: &str = "2022-11-28";
 #[derive(Debug, Clone, Deserialize)]
 pub struct Release {
     pub id: u64,
+    pub tag_name: String,
+    pub body: Option<String>,
+    pub draft: bool,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -30,6 +33,11 @@ struct CreateRelease<'a> {
     body: &'a str,
     draft: bool,
     prerelease: bool,
+}
+
+#[derive(Debug, Serialize)]
+struct RenameAsset<'a> {
+    name: &'a str,
 }
 
 #[derive(Debug)]
@@ -54,7 +62,7 @@ impl GitHub {
         })
     }
 
-    pub fn get_or_create_release(&self, tag: &str) -> Result<Release> {
+    pub fn get_or_create_release(&self, tag: &str, body: &str) -> Result<Release> {
         let lookup = self.api_url(&["releases", "tags", tag])?;
         let response = self.send(self.get(lookup))?;
 
@@ -73,7 +81,7 @@ impl GitHub {
         let payload = CreateRelease {
             tag_name: tag,
             name: format!("Nix Binary Cache ({tag})"),
-            body: "Nix binary cache NAR files managed by static-nix-cache.",
+            body,
             draft: false,
             prerelease: false,
         };
@@ -97,6 +105,36 @@ impl GitHub {
         }
 
         response_error(response, "creating GitHub release")
+    }
+
+    pub fn list_releases(&self) -> Result<Vec<Release>> {
+        let mut all = Vec::new();
+        let mut page = 1_u32;
+
+        loop {
+            let mut url = self.api_url(&["releases"])?;
+            url.query_pairs_mut()
+                .append_pair("per_page", "100")
+                .append_pair("page", &page.to_string());
+
+            let response = self.send(self.get(url))?;
+            if !response.status().is_success() {
+                return response_error(response, "listing GitHub releases");
+            }
+
+            let releases: Vec<Release> = response
+                .json()
+                .context("parsing GitHub releases response")?;
+            let count = releases.len();
+            all.extend(releases);
+
+            if count < 100 {
+                break;
+            }
+            page += 1;
+        }
+
+        Ok(all)
     }
 
     pub fn list_assets(&self, release_id: u64) -> Result<Vec<Asset>> {
@@ -136,6 +174,18 @@ impl GitHub {
             return Ok(());
         }
         response_error(response, "deleting GitHub release asset")
+    }
+
+    pub fn rename_asset(&self, asset_id: u64, name: &str) -> Result<Asset> {
+        let url = self.api_url(&["releases", "assets", &asset_id.to_string()])?;
+        let response = self.send(self.patch(url).json(&RenameAsset { name }))?;
+        if response.status().is_success() {
+            return response.json().context("parsing renamed GitHub asset");
+        }
+        response_error(
+            response,
+            &format!("renaming GitHub release asset to {name}"),
+        )
     }
 
     pub fn upload_file(
@@ -269,6 +319,12 @@ impl GitHub {
     fn post(&self, url: Url) -> RequestBuilder {
         self.client
             .post(url)
+            .header(ACCEPT, "application/vnd.github+json")
+    }
+
+    fn patch(&self, url: Url) -> RequestBuilder {
+        self.client
+            .patch(url)
             .header(ACCEPT, "application/vnd.github+json")
     }
 
