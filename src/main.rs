@@ -20,6 +20,9 @@ struct Cli {
 enum Command {
     /// Publish a file:// Nix binary cache to GitHub Releases and generate static metadata.
     Publish(PublishArgs),
+
+    /// Delete release assets that are absent from an authoritative local cache.
+    Prune(PruneArgs),
 }
 
 #[derive(Debug, Args)]
@@ -44,7 +47,7 @@ struct PublishArgs {
     #[arg(long, env = "GITHUB_TOKEN", hide_env_values = true)]
     token: String,
 
-    /// GitHub Release tag that stores NARs and persistent .narinfo metadata.
+    /// Base tag for the GitHub Release shards that store cache assets.
     #[arg(long, env = "GITHUB_RELEASE_TAG", default_value = "nix-cache")]
     release_tag: String,
 
@@ -55,6 +58,33 @@ struct PublishArgs {
     /// Binary cache priority; lower values have higher priority in Nix.
     #[arg(long, env = "CACHE_PRIORITY", default_value_t = 30)]
     priority: u32,
+
+    /// Generate static metadata only for paths in this local cache.
+    #[arg(long)]
+    authoritative: bool,
+}
+
+#[derive(Debug, Args)]
+struct PruneArgs {
+    /// Authoritative directory produced by `nix copy --to file:///...`.
+    #[arg(long)]
+    cache_dir: PathBuf,
+
+    /// GitHub repository owner. Defaults to the owner from GITHUB_REPOSITORY.
+    #[arg(long, env = "GITHUB_OWNER")]
+    owner: Option<String>,
+
+    /// GitHub repository name. Defaults to the repo from GITHUB_REPOSITORY.
+    #[arg(long, env = "GITHUB_REPO")]
+    repo: Option<String>,
+
+    /// GitHub token with contents:write permission.
+    #[arg(long, env = "GITHUB_TOKEN", hide_env_values = true)]
+    token: String,
+
+    /// Base tag for the GitHub Release shards that store cache assets.
+    #[arg(long, env = "GITHUB_RELEASE_TAG", default_value = "nix-cache")]
+    release_tag: String,
 }
 
 fn main() {
@@ -79,8 +109,20 @@ fn real_main() -> Result<()> {
                 release_tag: args.release_tag,
                 store_dir: args.store_dir,
                 priority: args.priority,
+                authoritative: args.authoritative,
             };
             publish::publish(options)
+        }
+        Command::Prune(args) => {
+            let (owner, repo) = resolve_repository(args.owner, args.repo)?;
+            let options = publish::PruneOptions {
+                cache_dir: args.cache_dir,
+                owner,
+                repo,
+                token: args.token,
+                release_tag: args.release_tag,
+            };
+            publish::prune(options)
         }
     }
 }
