@@ -7,7 +7,7 @@ required.
 
 ## Deploy From GitHub Actions
 
-Enable GitHub Pages with **Source: GitHub Actions**, then add this workflow:
+Enable GitHub Pages with Github actions by navigating to Settings -> Pages, then set the Build and Deployment source to Github Actions. Then add this workflow:
 
 ```yaml
 name: Deploy Nix cache
@@ -67,6 +67,29 @@ Use `paths` when the build does not leave standard result links:
       package-result
       documentation-result
       container-result
+```
+
+## Setting Up Cache Signing
+
+Start by generating a public/private key pair:
+
+```bash
+nix-store --generate-binary-cache-key \
+  wfas-nix-1 \
+  cache-private-key.pem \
+  cache-public-key.pem
+```
+
+Set the private key for the repository by navigating to Settings -> Secrets and variables -> Actions -> New Repository Secret, then add value for: `NIX_CACHE_SIGNING_KEY`.
+
+You can verify the cache works by trying the substitution locally:
+
+```bash
+curl https://ishaan-datta.github.io/wfas-nix/nix-cache-info
+
+nix build github:Ishaan-Datta/wfas-nix \
+  --option extra-substituters https://ishaan-datta.github.io/wfas-nix/ \
+  --option extra-trusted-public-keys 'wfas-nix-1:YOUR_PUBLIC_KEY'
 ```
 
 ## Use The Cache
@@ -178,8 +201,8 @@ GITHUB_TOKEN=... static-nix-cache publish \
 | `--output-dir`    |                      |                    | Static metadata output directory                |
 | `--owner`         | `GITHUB_OWNER`       | repository context | Destination owner                               |
 | `--repo`          | `GITHUB_REPO`        | repository context | Destination repository                          |
-| `--token`         | `GITHUB_TOKEN`       | required           | Token with `contents: write`                     |
-| `--release-tag`   | `GITHUB_RELEASE_TAG` | `nix-cache`        | Base tag for cache release shards                |
+| `--token`         | `GITHUB_TOKEN`       | required           | Token with `contents: write`                    |
+| `--release-tag`   | `GITHUB_RELEASE_TAG` | `nix-cache`        | Base tag for cache release shards               |
 | `--store-dir`     | `STORE_DIR`          | `/nix/store`       | Store directory advertised to Nix               |
 | `--priority`      | `CACHE_PRIORITY`     | `30`               | Binary cache priority                           |
 | `--authoritative` |                      | `false`            | Generate metadata only for the supplied closure |
